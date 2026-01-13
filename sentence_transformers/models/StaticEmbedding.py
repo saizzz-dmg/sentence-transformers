@@ -83,7 +83,6 @@ class StaticEmbedding(InputModule):
 
         if isinstance(tokenizer, PreTrainedTokenizerFast):
             # print(type(tokenizer))
-            
             tokenizer = tokenizer._tokenizer
             # print(type(tokenizer))
             # # print("yes it is")
