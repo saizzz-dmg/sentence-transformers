@@ -38,6 +38,8 @@ from .OnlineContrastiveLoss import OnlineContrastiveLoss
 from .SoftmaxLoss import SoftmaxLoss
 from .TripletLoss import TripletDistanceMetric, TripletLoss
 
+from .GISTEmbedLossWithGOL import GISTWithGOLLoss as GISTEmbedLossWithGOL
+
 __all__ = [
     "AdaptiveLayerLoss",
     "CosineSimilarityLoss",
