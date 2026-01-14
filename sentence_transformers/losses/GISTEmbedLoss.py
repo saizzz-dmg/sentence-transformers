@@ -242,8 +242,8 @@ class GISTEmbedLoss(nn.Module):
 
         #Offset is related to GPU rank. Thus , making diagonal values True with an offset.
         positive_mask.diagonal(offset=offset).fill_(True)
-
-        ap_sim = mask_false_negatives(guided_ap_sim, ap_sim, positive_mask=positive_mask)
+        # Apply false negative suppression to each similarity matrix using guided similarity as anchor
+        ap_sim = mask_false_negatives(guided_ap_sim, ap_sim, positive_mask=positive_mask)  # anchor-positive
         scores = [ap_sim]
 
         if self.contrast_anchors:
