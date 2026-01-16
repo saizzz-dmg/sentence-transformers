@@ -128,9 +128,6 @@ class GISTWithGOLLoss(nn.Module):
         if isinstance(output, dict) and 'sentence_embedding' in output:
             self._captured_embeddings.append(output['sentence_embedding'])
 
-        # else:
-        #     # Fallback if output is raw tensor
-        #     self._captured_embeddings.append(output
 
     def forward(self, sentence_features: list[dict[str, Tensor]], labels: Tensor):
 
@@ -150,23 +147,38 @@ class GISTWithGOLLoss(nn.Module):
             # Checking if hook has been hit
             if self._captured_embeddings:
                 embeddings = self._captured_embeddings
-            else:
-                # this block executes when MRL decorates forward of model. which caches sentence embeddings.
-                # In such cases , hook will not be hit.
+            
+            elif hasattr(self.model.forward, "cache"):
 
-                embeddings = [self.model(
-                    sentence_feature
-                )["sentence_embedding"] for sentence_feature in sentence_features]
+                #forward modified. cache hit
+                decorator_forward = self.model.forward
+                
+                #utilizing the full precision vectors from cache
+                full_outputs = decorator_forward.cache[:len(sentence_features)]
+                
+                # CRITICAL: We must manually shrink to the current dimension
+                # so GOL penalizes the subspace, not the full space.
+                current_dim = decorator_forward.dim
+                embeddings = [fo["sentence_embedding"][..., :current_dim] for fo in full_outputs]
+                embeddings = [torch.nn.functional.normalize(embedding, p=2, dim=-1) for embedding in embeddings]
+
+                #important key changes done : 
+                # This loss calls GistEmbedLoss which every time , calls a forward for the model.
+                # As a result , the mrl dimensions and the indices will be exhausted by the original 
+                #loss . As a result , even when we cache , this auxiliary loss will further look for 
+                #dimensions which will result in index out of bounds. To not affect the original 
+                #implementation from Matrayoshka loss , direct cache hit has been made to get the 
+                #full precision embeddings.
+
+            else:
+                raise FileNotFoundError("Hook not trigger successfully. Cache miss occured !")
 
             loss_gol = self.calculate_gol(embeddings)
 
-            # 6. Combine
-            total_loss = loss_gist + (self.gol_weight * loss_gol)
-            
-            return total_loss
-
+            return loss_gist + (self.gol_weight * loss_gol)
+        
         finally:
-            # 7. Cleanup: ALWAYS remove the hook so it doesn't persist
+            #hook cleanup
             hook_handle.remove()
             self._captured_embeddings = None
 
