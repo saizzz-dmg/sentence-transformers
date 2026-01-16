@@ -119,8 +119,6 @@ class GISTWithGOLLoss(nn.Module):
             contrast_positives= contrast_positives , 
             gather_across_devices= gather_across_devices)
         
-        # to store the embeddings from the model's final layer.
-        self._captured_embeddings = []
 
     def _hook_fn(self, module, input, output):
         """
@@ -128,8 +126,6 @@ class GISTWithGOLLoss(nn.Module):
         Output is typically a dictionary containing 'sentence_embedding'.
         """
         if isinstance(output, dict) and 'sentence_embedding' in output:
-
-            print("The if block is the one executed")
             self._captured_embeddings.append(output['sentence_embedding'])
 
         # else:
@@ -137,26 +133,32 @@ class GISTWithGOLLoss(nn.Module):
         #     self._captured_embeddings.append(output
 
     def forward(self, sentence_features: list[dict[str, Tensor]], labels: Tensor):
-        # 2. Register a hook on the pooling layer (or the last layer of the model)
-        # Assuming the model is a SentenceTransformer, it has a sequence of modules.
-        # We usually want the output of the last module (Pooling).
-        last_module = self.model[-1]
-        hook_handle = last_module.register_forward_hook(self._hook_fn)
+
+        #getting the final module of the model depending on DDP use
+        if hasattr(self.model, "module"):
+            target_module = self.model.module 
+        else:
+            target_module = self.model
+        
+        self._captured_embeddings = []
+        hook_handle = target_module.register_forward_hook(self._hook_fn)
 
         try:
-
+            # run standard GistEmbed loss on the sentence_features
             loss_gist = self.gist_loss(sentence_features, labels)
 
-            # assigning the embeddings captued by forward hook.
-            embeddings = self._captured_embeddings
+            # Checking if hook has been hit
+            if self._captured_embeddings:
+                embeddings = self._captured_embeddings
+            else:
+                # this block executes when MRL decorates forward of model. which caches sentence embeddings.
+                # In such cases , hook will not be hit.
 
-            # Sanity check to ensure hook worked
-            if len(embeddings) == 0:
-                raise RuntimeError("Failed to capture embeddings via hook. Check model architecture.")
+                embeddings = [self.model(
+                    sentence_feature
+                )["sentence_embedding"] for sentence_feature in sentence_features]
 
-            # 5. Calculate GOL (Generalized Orthogonal Loss / Your Custom Loss)
-            # You now have the exact embeddings used for GIST, without a second forward pass.
-            loss_gol = self.calculate_gol(embeddings, labels)
+            loss_gol = self.calculate_gol(embeddings)
 
             # 6. Combine
             total_loss = loss_gist + (self.gol_weight * loss_gol)
@@ -168,7 +170,7 @@ class GISTWithGOLLoss(nn.Module):
             hook_handle.remove()
             self._captured_embeddings = None
 
-    def calculate_gol(self , embeddings, labels):
+    def calculate_gol(self , embeddings):
         """
         Docstring for calculate_gol
         
