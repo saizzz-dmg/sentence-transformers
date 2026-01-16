@@ -119,7 +119,7 @@ class GISTWithGOLLoss(nn.Module):
             contrast_positives= contrast_positives , 
             gather_across_devices= gather_across_devices)
         
-        # Storage for the embeddings "stolen" from the forward pass
+        # to store the embeddings from the model's final layer.
         self._captured_embeddings = []
 
     def _hook_fn(self, module, input, output):
@@ -144,19 +144,12 @@ class GISTWithGOLLoss(nn.Module):
         hook_handle = last_module.register_forward_hook(self._hook_fn)
 
         try:
-            # 3. Call the Original GIST Loss
-            # This triggers the model.forward() internally.
-            # Our hook will activate and save the embeddings to self._captured_embeddings
+
             loss_gist = self.gist_loss(sentence_features, labels)
 
-            # 4. Retrieve captured embeddings
+            # assigning the embeddings captued by forward hook.
             embeddings = self._captured_embeddings
 
-
-            print(len(embeddings))
-
-            quit()
-            
             # Sanity check to ensure hook worked
             if len(embeddings) == 0:
                 raise RuntimeError("Failed to capture embeddings via hook. Check model architecture.")
