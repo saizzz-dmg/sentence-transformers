@@ -32,7 +32,7 @@ class GISTWithGOLLoss(nn.Module):
 
         In addition to the functionalities from GistEmbed Loss , we additionally include GLobal Orthogonal Loss (GOL).
         The ultimate aim is that the vectors in high dimensional space should not be anisotropic in nature and be spread across 
-        all the available directions. This solved the problem of vector clouding which results in better performance in ANN alogs.
+        all the available directions. This solved the problem of vector clouding which results in better performance in ANN algos.
         The GOL is used as an auxiliary loss and is thus important to be given less weightage. 
 
         This makes sure the vectors instead being accidentilly closer , will now be solely based on semantics.
