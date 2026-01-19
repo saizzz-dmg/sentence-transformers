@@ -220,3 +220,15 @@ class GISTWithGOLLoss(nn.Module):
         normalization = batch_size * (batch_size - 1)
         
         return sim_sq.sum() / normalization
+    
+    def get_config_dict(self) -> dict[str, Any]:
+        return {
+            "guide": self.guide,
+            "temperature": self.temperature,
+            "margin_strategy": self.margin_strategy,
+            "margin": self.margin,
+            "contrast_anchors": self.contrast_anchors,
+            "contrast_positives": self.contrast_positives,
+            "gather_across_devices": self.gather_across_devices,
+            "gol_weight": self.gol_weight
+        }

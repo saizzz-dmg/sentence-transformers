@@ -108,9 +108,7 @@ class GISTEmbedLoss(nn.Module):
         if not hasattr(model, "tokenizer") or not hasattr(guide, "tokenizer"):
             raise ValueError("Both the training model and the guiding model must have a tokenizer attribute.")
         if not isinstance(model.tokenizer , PreTrainedTokenizerBase):
-            if isinstance(model.tokenizer , Tokenizer) and isinstance(guide.tokenizer , PreTrainedTokenizerBase):
-                print(f"model's tokenizer is of type {type(model.tokenizer)} , hence proceeding with loss calc.")
-            else:
+            if not isinstance(model.tokenizer , Tokenizer) and isinstance(guide.tokenizer , PreTrainedTokenizerBase):
                 raise ValueError(f"Model's tokenizer is neither of type {type(PreTrainedTokenizerBase)} nor of type {type(Tokenizer)} or guide's tokenizer is not of type PreTrainedTokenizerBase")
 
         self.must_retokenize = (
@@ -119,8 +117,6 @@ class GISTEmbedLoss(nn.Module):
         if self.must_retokenize:
             self.tokenizer = self.model.tokenizer
 
-            if isinstance(self.model[0], StaticEmbedding):
-                print("Note: The model is of static embedding type. Retokenizing using Tokenizer from tokenizers. ")
 
         if margin_strategy not in ("absolute", "relative"):
             raise ValueError("margin_strategy must be 'absolute' or 'relative'.")
