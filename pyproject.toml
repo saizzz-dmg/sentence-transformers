@@ -1,3 +1,23 @@
+[tool.poetry]
+name = "sentence-transformers"
+version = "5.1.2"
+description = "modified sentence transformers with Gistembed loss combined with GOL. Also has support for weighted sum of vectors during inference from static models."
+authors = ["sairamrs <sairamrsuresh@gmail.com>"]
+readme = "README.md"
+packages = [{include = "sentence_transformers"}]
+
+[tool.poetry.dependencies]
+python = "~3.12"
+transformers = ">=4.41.0,<6.0.0"
+huggingface-hub = ">=0.20.0"
+torch = ">=1.11.0"
+numpy = "*"
+scikit-learn = "*"
+scipy = "*"
+typing-extensions = ">=4.5.0"
+tqdm = "*"
+
+
 [project]
 name = "sentence-transformers"
 version = "5.3.0.dev0"
