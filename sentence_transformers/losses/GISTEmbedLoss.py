@@ -6,6 +6,7 @@ from typing import Any, Literal
 import torch
 from torch import Tensor, nn
 from transformers import PreTrainedTokenizerBase
+from tokenizers import Tokenizer
 
 from sentence_transformers.models import StaticEmbedding
 from sentence_transformers.SentenceTransformer import SentenceTransformer
@@ -106,23 +107,16 @@ class GISTEmbedLoss(nn.Module):
         self.similarity_fct = nn.CosineSimilarity(dim=-1)
         if not hasattr(model, "tokenizer") or not hasattr(guide, "tokenizer"):
             raise ValueError("Both the training model and the guiding model must have a tokenizer attribute.")
-        if not isinstance(model.tokenizer, PreTrainedTokenizerBase) or not isinstance(
-            guide.tokenizer, PreTrainedTokenizerBase
-        ):
-            raise ValueError(
-                "Both the training model and the guiding model must use a PreTrainedTokenizer from transformers."
-            )
+        if not isinstance(model.tokenizer , PreTrainedTokenizerBase):
+            if not isinstance(model.tokenizer , Tokenizer) and isinstance(guide.tokenizer , PreTrainedTokenizerBase):
+                raise ValueError(f"Model's tokenizer is neither of type {type(PreTrainedTokenizerBase)} nor of type {type(Tokenizer)} or guide's tokenizer is not of type PreTrainedTokenizerBase")
+
         self.must_retokenize = (
             model.tokenizer.get_vocab() != guide.tokenizer.get_vocab() or guide.max_seq_length < model.max_seq_length
         )
         if self.must_retokenize:
             self.tokenizer = self.model.tokenizer
 
-            if isinstance(self.model[0], StaticEmbedding):
-                raise ValueError(
-                    "If we must retokenize because the guide model has a different tokenizer, "
-                    "then the Sentence Transformer model must not be based on a StaticEmbedding."
-                )
 
         if margin_strategy not in ("absolute", "relative"):
             raise ValueError("margin_strategy must be 'absolute' or 'relative'.")
@@ -140,18 +134,51 @@ class GISTEmbedLoss(nn.Module):
         embeddings = [self.model(sentence_feature)["sentence_embedding"] for sentence_feature in sentence_features]
         with torch.no_grad():
             if self.must_retokenize:
-                decoded = [
-                    self.tokenizer.batch_decode(sentence_feature["input_ids"], skip_special_tokens=True)
-                    for sentence_feature in sentence_features
-                ]
-                sentence_features = [self.guide.tokenize(sentences) for sentences in decoded]
-                sentence_features = [
+
+                decoded = []
+                for sentence_feature in sentence_features:
+                    ids = sentence_feature["input_ids"]
+                    
+                    if hasattr(self.tokenizer, "batch_decode"):
+                        """
+                        Both model and guide have PreTrainedTokenizerBase to be the tokenizer type.
+                        """
+                        decoded.append(self.tokenizer.batch_decode(ids, skip_special_tokens=True))
+                    else:
+                        """
+                        This is custom implementation since StaticEmbedding models will have 
+                        offets in sentence features. For easy pick of tokens from vocab instead
+                        of doing a tensor multiplication along with [PAD].
+
+                        Tokenizer from tokenizers have decode_batch which has to have 
+
+                        Iterable[[List] ,[List]] where the outer list has len = number of sentences and inner 
+                        lists have lengths according to their sentence length.  
+                        """
+
+                        if "offsets" in sentence_feature:
+                            flat_ids = ids.tolist()
+                            offsets = sentence_feature["offsets"].tolist()
+                            batch_ids_list = []
+                            for i in range(len(offsets)):
+                                start = offsets[i]
+                                end = offsets[i+1] if i < len(offsets) - 1 else len(flat_ids)
+                                batch_ids_list.append(flat_ids[start:end])
+                            decoded.append(self.tokenizer.decode_batch(batch_ids_list, skip_special_tokens=True))
+                        else:
+                            decoded.append(self.tokenizer.decode_batch(ids.tolist(), skip_special_tokens=True))
+
+                
+                sentence_features_guide = [self.guide.tokenize(sentences) for sentences in decoded]
+                sentence_features_guide = [
                     {key: value.to(self.guide.device) for key, value in sentence_feature.items()}
-                    for sentence_feature in sentence_features
+                    for sentence_feature in sentence_features_guide
                 ]
+            else:
+                sentence_features_guide = sentence_features
 
             guide_embeddings = [
-                self.guide(sentence_feature)["sentence_embedding"] for sentence_feature in sentence_features
+                self.guide(sentence_feature)["sentence_embedding"] for sentence_feature in sentence_features_guide
             ]
 
         negative = None
@@ -206,8 +233,11 @@ class GISTEmbedLoss(nn.Module):
             return sim_mat
 
         # Create a mask to protect true positive pairs in the anchor-positive matrix (i.e., diagonal elements)
-        positive_mask = torch.eye(*guided_ap_sim.shape, dtype=torch.bool, device=guided_ap_sim.device)
+        # this tensor has all the values marked False
+        positive_mask = torch.zeros_like(guided_ap_sim, dtype=torch.bool)
 
+        #Offset is related to GPU rank. Thus , making diagonal values True with an offset.
+        positive_mask.diagonal(offset=offset).fill_(True)
         # Apply false negative suppression to each similarity matrix using guided similarity as anchor
         ap_sim = mask_false_negatives(guided_ap_sim, ap_sim, positive_mask=positive_mask)  # anchor-positive
         scores = [ap_sim]

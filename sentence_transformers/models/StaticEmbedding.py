@@ -13,6 +13,7 @@ except ImportError:
     from typing_extensions import Self
 
 import numpy as np
+import torch.nn.functional as F
 import torch
 from safetensors.torch import save_file as save_safetensors_file
 from tokenizers import Tokenizer
@@ -31,7 +32,9 @@ class StaticEmbedding(InputModule):
         tokenizer: Tokenizer | PreTrainedTokenizerFast,
         embedding_weights: np.ndarray | torch.Tensor | None = None,
         embedding_dim: int | None = None,
-        **kwargs,
+        token_priorities: torch.Tensor | None = None,
+        dtype: torch.dtype = torch.float32,
+        **kwargs
     ) -> None:
         """
         Initializes the StaticEmbedding model given a tokenizer. The model is a simple embedding bag model that
@@ -44,6 +47,8 @@ class StaticEmbedding(InputModule):
                 Defaults to None.
             embedding_dim (int | None, optional): Dimension of the embeddings. Required if embedding_weights
                 is not provided. Defaults to None.
+            token_priorities (torch.Tensor) : weights to be given to inidividual tokens when averaging.
+            dtype (torch.dtype) : datatype in which the weights have to be stored.
 
         .. tip::
 
@@ -76,6 +81,15 @@ class StaticEmbedding(InputModule):
         Raises:
             ValueError: If the tokenizer is not a fast tokenizer.
             ValueError: If neither `embedding_weights` nor `embedding_dim` is provided.
+
+        Note :  In additional to the standard implementation ,  which is simple averaging of tokens , 
+        This implementation has a weighted sum of the token embeddings. These values have to be chosen
+        using zipfs law according to minishlabs docs. However using an actual corpus to find the token frequency
+        is found to be more effective. Upto the user to decide which approach to use.
+
+        The tokenpriorities should have the weights of corresponding tokens in the same order in which they are found in
+        the vocabulary.
+        
         """
         super().__init__()
 
@@ -106,6 +120,16 @@ class StaticEmbedding(InputModule):
         # For the model card
         self.base_model = kwargs.get("base_model", None)
 
+
+    #registering the token_priorities.
+        if token_priorities is not None:
+            assert len(token_priorities) == self.num_embeddings, "Token priorities length must match vocab size"
+            self.register_buffer("token_priorities", token_priorities.to(dtype=dtype))
+            self.forward = self.forward_weighted
+
+            #will fallback to default forward implementation if there are are no token priorities.
+            
+
     def tokenize(self, texts: list[str], **kwargs) -> dict[str, torch.Tensor]:
         encodings = self.tokenizer.encode_batch(texts, add_special_tokens=False)
         encodings_ids = [encoding.ids for encoding in encodings]
@@ -114,8 +138,46 @@ class StaticEmbedding(InputModule):
         input_ids = torch.tensor([token_id for token_ids in encodings_ids for token_id in token_ids], dtype=torch.long)
         return {"input_ids": input_ids, "offsets": offsets}
 
+    def _offsets_to_bag_ids(self, input_ids: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
+        offsets_diff = torch.cat([offsets[1:], torch.tensor([len(input_ids)], device=offsets.device)])
+        lengths = offsets_diff - offsets
+        bag_ids = torch.repeat_interleave(torch.arange(len(offsets), device=offsets.device), lengths)
+        return bag_ids
+    
     def forward(self, features: dict[str, torch.Tensor], **kwargs) -> dict[str, torch.Tensor]:
         features["sentence_embedding"] = self.embedding(features["input_ids"], features["offsets"])
+        return features
+
+    def forward_weighted(self, features: dict[str, torch.Tensor], **kwargs) -> dict[str, torch.Tensor]:
+        input_ids = features["input_ids"]
+        offsets = features["offsets"]
+
+        # 1. Get Raw Vectors [Batch_Total_Words, Dim]
+        import torch.nn.functional as F
+        raw_embeddings = F.embedding(
+            input_ids, 
+            self.embedding.weight, 
+            padding_idx=self.embedding.padding_idx,    
+            max_norm=self.embedding.max_norm,         
+            norm_type=self.embedding.norm_type,           
+            scale_grad_by_freq=self.embedding.scale_grad_by_freq, 
+            sparse=self.embedding.sparse                  
+        )
+
+        # 2. Get Token-Specific Weights [Batch_Total_Words]
+        batch_token_weights = self.token_priorities[input_ids]
+
+        # 3. Apply Scaling
+        weighted_embeddings = raw_embeddings * batch_token_weights.unsqueeze(-1)
+
+        # 4. Prepare IDs
+        bag_ids = self._offsets_to_bag_ids(input_ids, offsets)
+
+        # 5. Aggregate (Weighted Sum)
+        output = torch.zeros(len(offsets), self.embedding_dim, device=input_ids.device, dtype=raw_embeddings.dtype)
+        output.index_add_(0, bag_ids, weighted_embeddings)
+
+        features["sentence_embedding"] = output
         return features
 
     @property
