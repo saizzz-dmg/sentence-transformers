@@ -1,7 +1,7 @@
 import torch
 from torch import nn, Tensor
 from sentence_transformers import SentenceTransformer
-from typing import  Literal
+from typing import  Literal , Any
 
 from sentence_transformers.losses import GISTEmbedLoss 
 
